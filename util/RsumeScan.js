@@ -1,204 +1,234 @@
+const formidable = require("formidable");
+const fs = require("fs");
+const pdfParse = require("@cedrugs/pdf-parse");
+const pdfjsLib = require("pdfjs-dist");
 
-import fs from "fs";
-import pdf from "pdf-parse";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.js";
-import stringSimilarity from "string-similarity";
-import { titleCase } from "title-case";
+const MANDATORY_SECTIONS = [
+  "PROFESSIONAL SUMMARY",
+  "WORK EXPERIENCE",
+  "EDUCATION",
+  "SKILLS",
+  "LANGUAGES",
+];
 
-/** ---------- Parse Resume PDF ---------- **/
-async function parsePDF(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  const data = await pdf(buffer);
-  return data.text || "";
-}
+const CORRECT_ORDER = [
+  "PROFESSIONAL SUMMARY",
+  "WORK EXPERIENCE",
+  "EDUCATION",
+  "SKILLS",
+  "CORE COMPETENCIES",
+  "CERTIFICATIONS",
+  "LANGUAGES",
+];
 
-/** ---------- Rule-Based Analyzers ---------- **/
-function checkBulletPoints(text) {
-  const sections = text.split("\n\n");
-  const issues = [];
-
-  sections.forEach((sec, i) => {
-    const bulletCount = (sec.match(/^[-•▪*]/gm) || []).length;
-    const sentenceCount = (sec.match(/\./g) || []).length;
-
-    if (sentenceCount > 5 && bulletCount === 0) {
-      issues.push(`🟠 Section ${i + 1} has long paragraphs — use concise bullet points.`);
-    }
-  });
-  return issues;
-}
-
-function checkProjects(text) {
-  if (!/project/i.test(text))
-    return ["🟡 Add a 'Projects' section to showcase your hands-on experience."];
-  return [];
-}
-
-function checkContactFormatting(text) {
-  const emailMatch = text.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
-  const phoneMatch = text.match(/(\+?\d{1,3}[-.\s]?)?\d{10}/);
-  const issues = [];
-  if (!emailMatch || !phoneMatch)
-    issues.push("🔴 Missing proper contact information (email/phone).");
-  return issues;
-}
-
-function checkHeadings(text) {
-  const headings = text.match(/^[A-Z][A-Za-z\s]+(?=\n|:)/gm) || [];
-  const issues = [];
-
-  headings.forEach(h => {
-    if (h !== titleCase(h)) issues.push(`🟡 Heading "${h}" should be "${titleCase(h)}" for consistency.`);
-  });
-
-  return issues;
-}
-
-function checkAchievements(text) {
-  const issues = [];
-  const lines = text.split("\n");
-  lines.forEach(line => {
-    if (/experience|achievement|project|work/i.test(line) && !/\d+%|\d+\+/.test(line))
-      issues.push(`🟢 Quantify achievements — add measurable results like "Improved efficiency by 20%".`);
-  });
-  return issues;
-}
-
-function checkFileCompatibility(text) {
-  if (text.length < 200)
-    return ["🔴 File may be image-based (no readable text). Use text-based PDF or DOCX."];
-  return [];
-}
-
-function checkKeywordMatch(text, jobDesc = "") {
-  if (!jobDesc) return [];
-  const score = stringSimilarity.compareTwoStrings(text.toLowerCase(), jobDesc.toLowerCase());
-  return [`🟢 Keyword match score: ${(score * 100).toFixed(2)}%`];
-}
-
-/** ---------- Basic Grammar & Style Heuristic ---------- **/
-function checkGrammarHeuristics(text) {
-  const sentences = text.split(/[.!?]/).filter(s => s.trim().length > 0);
-  const issues = [];
-
-  const longSentences = sentences.filter(s => s.split(" ").length > 25);
-  if (longSentences.length > 5)
-    issues.push(`🟠 Found ${longSentences.length} long sentences — consider splitting for clarity.`);
-
-  const lowercaseStart = sentences.filter(s => /^[a-z]/.test(s.trim()));
-  if (lowercaseStart.length > 0)
-    issues.push("🟠 Some sentences start with lowercase letters — check capitalization.");
-
-  if (issues.length === 0)
-    issues.push("✅ No major grammar or structure issues found.");
-  return issues;
-}
-
-/** ---------- Formatting Consistency Analyzer ---------- **/
-async function checkFormattingConsistency(filePath) {
-  const issues = [];
-  try {
-    const data = new Uint8Array(fs.readFileSync(filePath));
-    const pdf = await pdfjsLib.getDocument({ data }).promise;
-
-    let fonts = new Set();
-    let fontSizes = new Set();
-    let leftPositions = [];
-
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-
-      textContent.items.forEach(item => {
-        if (item.fontName) fonts.add(item.fontName);
-        if (item.transform) {
-          const fontSize = Math.round(item.transform[0]);
-          fontSizes.add(fontSize);
-          leftPositions.push(Math.round(item.transform[4]));
-        }
-      });
-    }
-
-    if (fonts.size > 2)
-      issues.push("⚠️ Multiple fonts detected — use one consistent font (e.g., Calibri, Arial).");
-
-    if (fontSizes.size > 4)
-      issues.push("⚠️ Too many font sizes — use 10–12 pt for text, 14–16 pt for headings.");
-
-    const leftVar = Math.max(...leftPositions) - Math.min(...leftPositions);
-    if (leftVar > 30)
-      issues.push("⚠️ Inconsistent text alignment — keep left margins uniform.");
-
-    const page1 = await pdf.getPage(1);
-    const text = page1.getTextContent().items.map(i => i.str).join("\n");
-    const bullets = text.match(/^[-•▪*]/gm);
-    if (bullets && bullets.length > 0) {
-      const bulletTypes = [...new Set(bullets)];
-      if (bulletTypes.length > 1)
-        issues.push("⚠️ Different bullet styles used — stick to one format.");
-    }
-  } catch (err) {
-    issues.push("❌ Could not analyze formatting (maybe an image-based PDF).");
+class RezoonATSScorer {
+  constructor() {
+    this.score = 100;
+    this.issues = [];
+    this.hasPhoto = false;
+    this.hasColoredBG = false;
+    this.isRezoonTemplate = false;
+    this.text = "";
+    this.lines = [];
   }
 
-  if (issues.length === 0)
-    issues.push("✅ Formatting appears consistent across sections.");
+  async scan(filePath) {
+    try {
+      const dataBuffer = fs.readFileSync(filePath);
+      const data = await pdfParse(dataBuffer); // ✅ Now works perfectly
+      this.text = data.text || "";
+      this.lines = this.text
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
 
-  return issues;
-}
+      this.hasPhoto = await this.detectPhoto(filePath);
+      this.hasColoredBG = await this.detectColoredBackground(filePath);
+      this.checkRezoonTemplate();
+      this.applyAllRules();
+      this.applyHardCapsAndBonus();
 
-/** ---------- Scoring ---------- **/
-function calculateScore(results) {
-  let score = 100;
-  const deductions = {
-    "🔴": 15,
-    "⚠️": 10,
-    "🟠": 7,
-    "🟡": 5,
-  };
-  results.forEach(r => {
-    Object.keys(deductions).forEach(icon => {
-      if (r.startsWith(icon)) score -= deductions[icon];
+      // Remove temp file (best-effort)
+      try {
+        fs.unlinkSync(filePath);
+      } catch (e) {
+        console.log("Temp file cleanup error:", e.message);
+      }
+
+      const finalScore = Math.max(0, Math.min(100, this.score));
+
+      return {
+        company: "Rezoon Digital",
+        atsScore: finalScore,
+        passed: finalScore >= 90,
+        isRezoonTemplate: this.isRezoonTemplate,
+        hasPhoto: this.hasPhoto,
+        hasColoredBackground: this.hasColoredBG,
+        message:
+          finalScore >= 90
+            ? "PASSED! 90+ Only with Official Rezoon Template"
+            : `Score: ${finalScore}/100 – Use Official Template`,
+        issues: this.issues.length > 0 ? this.issues : ["Perfect CV!"],
+      };
+    } catch (err) {
+      console.error("Scan Error:", err);
+      return {
+        atsScore: 0,
+        message: "PDF Error",
+        issues: ["Processing failed"],
+      };
+    }
+  }
+
+  async detectPhoto(filePath) {
+    try {
+      const pdfData = fs.readFileSync(filePath);
+      const uint8Data = new Uint8Array(pdfData); // ✅ Buffer → Uint8Array [web:78]
+      const pdf = await pdfjsLib.getDocument({ data: uint8Data }).promise;
+
+      const page = await pdf.getPage(1);
+      const ops = await page.getOperatorList();
+
+      return ops.fnArray.some(
+        (fn) =>
+          fn === pdfjsLib.OPS.paintImageXObject ||
+          fn === pdfjsLib.OPS.paintJpegXObject
+      );
+    } catch (err) {
+      console.log("Photo detection error:", err.message);
+      return false;
+    }
+  }
+
+  async detectColoredBackground(filePath) {
+    try {
+      const pdfData = fs.readFileSync(filePath);
+      const uint8Data = new Uint8Array(pdfData);
+      const pdf = await pdfjsLib.getDocument({ data: uint8Data }).promise;
+
+      for (let i = 1; i <= Math.min(pdf.numPages, 3); i++) {
+        const page = await pdf.getPage(i);
+        const ops = await page.getOperatorList();
+
+        for (let j = 0; j < ops.fnArray.length; j++) {
+          if (
+            ops.fnArray[j] === pdfjsLib.OPS.setFillColor ||
+            ops.fnArray[j] === pdfjsLib.OPS.setFillColorN
+          ) {
+            const color = ops.argsArray[j][0];
+            const isWhite =
+              Array.isArray(color) && color.every((c) => c >= 0.98);
+            if (!isWhite) return true;
+          }
+        }
+      }
+    } catch (err) {
+      console.log("BG detection error:", err.message);
+    }
+    return false;
+  }
+
+
+  checkRezoonTemplate() {
+    const markers = ["Inter", "Size 12", "size 8.6", "50–80 words"];
+    const hasAll = markers.every((m) => this.text.includes(m));
+    const nameRule = this.lines
+      .slice(0, 20)
+      .some((l) => /Name.*Inter.*Size 12/i.test(l));
+    this.isRezoonTemplate = hasAll && nameRule;
+
+    if (!this.isRezoonTemplate) {
+      this.score = Math.min(this.score, 85);
+      this.issues.push("Not using official Rezoon Digital template → Max 85");
+    }
+  }
+
+  applyAllRules() {
+    // Professional Summary 50–80 words
+    const sumIdx = this.lines.findIndex((l) =>
+      /PROFESSIONAL SUMMARY/i.test(l)
+    );
+    if (sumIdx !== -1) {
+      let words = 0;
+      for (let i = sumIdx + 1; i < this.lines.length; i++) {
+        if (/^[A-Z\s]{8,}$/.test(this.lines[i])) break;
+        words += this.lines[i].split(/\s+/).length;
+      }
+      if (words < 50 || words > 80) {
+        this.score -= 10;
+        this.issues.push(`Summary: ${words} words (must 50–80) → -10`);
+      }
+    }
+
+    // Mandatory sections
+    MANDATORY_SECTIONS.forEach((sec) => {
+      if (!this.lines.some((l) => l.toUpperCase().includes(sec))) {
+        this.score -= 10;
+        this.issues.push(`Missing: ${sec} → -10`);
+      }
     });
+
+    // Section order
+    let last = -1;
+    CORRECT_ORDER.forEach((sec) => {
+      const idx = this.lines.findIndex((l) => l.toUpperCase().includes(sec));
+      if (idx !== -1 && idx < last) {
+        this.score -= 5;
+        this.issues.push(`Wrong order: ${sec} → -5`);
+      }
+      if (idx !== -1) last = idx;
+    });
+
+    if (!/[•●◦\-–]/.test(this.text)) {
+      this.score -= 5;
+      this.issues.push("No bullet points → -5");
+    }
+    if (!this.text.includes("Inter")) {
+      this.score -= 5;
+      this.issues.push("Font not Inter → -5");
+    }
+  }
+
+  applyHardCapsAndBonus() {
+    if (this.hasPhoto) {
+      this.score = Math.min(this.score, 90);
+      this.issues.push("Photo detected → Max score: 90");
+    }
+    if (this.hasColoredBG) {
+      this.score -= 30;
+      this.score = Math.min(this.score, 60);
+      this.issues.push("Colored background → -30 & Max score: 60");
+    }
+    if (!this.isRezoonTemplate) this.score = Math.min(this.score, 85);
+
+    if (
+      this.score >= 95 &&
+      this.isRezoonTemplate &&
+      !this.hasPhoto &&
+      !this.hasColoredBG
+    ) {
+      this.score += 5;
+      this.issues.push("Perfect Rezoon format → +5 bonus");
+    }
+  }
+}
+
+module.exports = async (req, res) => {
+  const form = new formidable.IncomingForm();
+  form.parse(req, async (err, fields, files) => {
+    if (err || !files.cv) {
+      return res.status(400).json({ error: "Upload file with key: cv" });
+    }
+
+    const file = Array.isArray(files.cv) ? files.cv[0] : files.cv;
+    const filePath = file && file.filepath;
+
+    if (!filePath) {
+      return res.status(400).json({ error: "Invalid uploaded file" });
+    }
+
+    const scorer = new RezoonATSScorer();
+    const result = await scorer.scan(filePath);
+    res.json(result);
   });
-  return Math.max(0, score);
-}
-
-/** ---------- Main Function ---------- **/
-export async function reviewResume(filePath, jobDesc = "") {
-  console.log("📄 Analyzing resume:", filePath);
-  const text = await parsePDF(filePath);
-  if (!text) return console.log("❌ Could not read text from file.");
-
-  let results = [];
-
-  results.push(...checkBulletPoints(text));
-  results.push(...checkProjects(text));
-  results.push(...checkContactFormatting(text));
-  results.push(...checkHeadings(text));
-  results.push(...checkAchievements(text));
-  results.push(...checkFileCompatibility(text));
-  results.push(...checkKeywordMatch(text, jobDesc));
-  results.push(...checkGrammarHeuristics(text));
-
-  const formatResults = await checkFormattingConsistency(filePath);
-  results.push(...formatResults);
-
-  const score = calculateScore(results);
-
-  console.log("\n📋 Resume Review Summary");
-  console.log("=========================");
-  results.forEach(r => console.log("•", r));
-  console.log("=========================");
-  console.log(`📊 Overall Resume Score: ${score}/100`);
-  console.log("=========================\n");
-
-  return { score, results };
-}
-
-/** ---------- CLI Run Example ---------- **/
-if (process.argv[2]) {
-  const filePath = process.argv[2];
-  const jobDesc = process.argv.slice(3).join(" ") || "";
-  reviewResume(filePath, jobDesc);
-}
+};

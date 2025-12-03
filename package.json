@@ -4,13 +4,14 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon cvscan.js"
+    "start": "nodemon index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@cedrugs/pdf-parse": "^1.0.0",
     "axios": "^1.12.2",
     "bcrypt": "^6.0.0",
     "body-parser": "^2.2.0",
@@ -25,8 +26,7 @@
     "nodemailer": "^7.0.10",
     "nodemon": "^3.1.10",
     "pdf-lib": "^1.17.1",
-    "pdf-parse": "^2.4.5",
-    "pdfjs-dist": "^5.4.296",
+    "pdfjs-dist": "4.4.168",
     "pdfreader": "^3.0.8",
     "rand-token": "^1.0.1",
     "simple-spellchecker": "^1.0.2",

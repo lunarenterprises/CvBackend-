@@ -1,7 +1,8 @@
-var express = require("express");
-var route = express.Router();
+// routes/resumeRoute.js
+const express = require("express");
+const router = express.Router();
+const uploadCV = require("./util/RsumeScan");
 
-var { AtsScanResume } = require('./controller/ResumeCheck')
-route.post('/scan/resume', AtsScanResume)
+router.post("/resume", uploadCV);
 
-module.exports =route
+module.exports = router;
