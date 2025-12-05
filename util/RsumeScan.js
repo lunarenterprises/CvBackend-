@@ -82,6 +82,8 @@ class RezoonATSScorer {
 
   async detectPhoto(filePath) {
     try {
+      const pdfjsLib = await import("pdfjs-dist/build/pdf.mjs");
+      
       const pdfData = fs.readFileSync(filePath);
       const uint8Data = new Uint8Array(pdfData); // ✅ Buffer → Uint8Array [web:78]
       const pdf = await pdfjsLib.getDocument({ data: uint8Data }).promise;

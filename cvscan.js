@@ -25,7 +25,7 @@ app.get("/", (req, res) => {
   `);
 });
 
-const PORT = 3000;
+const PORT = 7005;
 app.listen(PORT, () => {
   console.log(`\nREZOON DIGITAL ATS LIVE → http://localhost:${PORT}`);
   console.log(`Upload CV → POST /scan/resume (form-data, key: cv)\n`);
