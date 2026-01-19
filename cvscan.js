@@ -33,32 +33,33 @@ app.get("/", (req, res) => {
 const PORT = 7005;
 
 // SSL Configuration
-const sslOptions = {
-  key: process.env.SSL_PRIVATE_KEY ? safeRead(process.env.SSL_PRIVATE_KEY) : null,
-  cert: process.env.SSL_CERTIFICATE ? safeRead(process.env.SSL_CERTIFICATE) : null,
-  ca: process.env.SSL_CA_BUNDLE ? safeRead(process.env.SSL_CA_BUNDLE) : null,
-};
-
-function safeRead(path) {
+if (process.env.NODE_ENV === "production") {
   try {
-    if (fs.existsSync(path)) {
-      return fs.readFileSync(path);
-    }
-  } catch (e) {
-    console.warn(`Could not read SSL file at ${path}`);
-  }
-  return null;
-}
+    const privateKey = fs.readFileSync(process.env.SSL_PRIVATE_KEY, "utf8");
+    const certificate = fs.readFileSync(process.env.SSL_CERTIFICATE, "utf8");
+    const ca = fs.readFileSync(process.env.SSL_CA_BUNDLE, "utf8");
 
-if (sslOptions.key && sslOptions.cert) {
-  https.createServer(sslOptions, app).listen(PORT, () => {
-    console.log(`\nREZOON DIGITAL ATS LIVE (HTTPS) → https://lunarsenterprises.com:${PORT}`);
-    console.log(`Upload CV → POST /scan/resume (form-data, key: cv)\n`);
-  });
+    const credentials = { key: privateKey, cert: certificate, ca: ca };
+    const httpsServer = https.createServer(credentials, app);
+
+    httpsServer.listen(PORT, () => {
+      console.log(`HTTPS Server running on port ${PORT}`);
+      console.log(`\nREZOON DIGITAL ATS LIVE (HTTPS) → https://lunarsenterprises.com:${PORT}`);
+      console.log(`Upload CV → POST /scan/resume (form-data, key: cv)\n`);
+    });
+  } catch (err) {
+    console.error("Error starting HTTPS server: " + err.message);
+    console.log("Falling back to HTTP...");
+    app.listen(PORT, () => {
+      console.log("Server running on " + PORT);
+      // console.log(`\nREZOON DIGITAL ATS LIVE (HTTP) → http://localhost:${PORT}`);
+      console.log(`Upload CV → POST /scan/resume (form-data, key: cv)\n`);
+    });
+  }
 } else {
   app.listen(PORT, () => {
+    console.log("Server running on " + PORT);
     console.log(`\nREZOON DIGITAL ATS LIVE (HTTP) → http://localhost:${PORT}`);
-    console.log("SSL keys not found or invalid, falling back to HTTP.");
     console.log(`Upload CV → POST /scan/resume (form-data, key: cv)\n`);
   });
 }
