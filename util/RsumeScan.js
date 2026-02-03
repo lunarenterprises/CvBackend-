@@ -52,7 +52,7 @@ class RezoonATSScorer {
 
 
       const finalScore = Math.max(0, Math.min(100, this.score));
-
+      console.log(this.hasColoredBG);
       return {
         company: "Rezoon Digital",
         atsScore: finalScore,
@@ -76,6 +76,7 @@ class RezoonATSScorer {
       };
     }
   }
+
 
   async detectPhoto(filePath) {
     try {
@@ -106,16 +107,60 @@ class RezoonATSScorer {
       for (let i = 1; i <= Math.min(pdf.numPages, 3); i++) {
         const page = await pdf.getPage(i);
         const ops = await page.getOperatorList();
+        console.log(`[BG Debug] Page ${i} Ops: ${ops.fnArray.length}`);
+
+        // Default state: Black (0,0,0) as per PDF spec
+        let r = 0, g = 0, b = 0;
+
+        // Debug: Log all unique ops on this page
+        const seenOps = new Set();
+        ops.fnArray.forEach(fn => {
+          const opName = Object.keys(pdfjsLib.OPS).find(k => pdfjsLib.OPS[k] === fn);
+          if (opName) seenOps.add(opName);
+        });
+        console.log(`[BG Debug] Unique Ops on Page ${i}:`, Array.from(seenOps).join(", "));
 
         for (let j = 0; j < ops.fnArray.length; j++) {
+          const fn = ops.fnArray[j];
+          const args = ops.argsArray[j];
+
+          // 1. Track Color Changes (Non-Stroking / Fill Color)
           if (
-            ops.fnArray[j] === pdfjsLib.OPS.setFillColor ||
-            ops.fnArray[j] === pdfjsLib.OPS.setFillColorN
+            fn === pdfjsLib.OPS.setFillColor ||
+            fn === pdfjsLib.OPS.setFillColorN
           ) {
-            const color = ops.argsArray[j][0];
-            const isWhite =
-              Array.isArray(color) && color.every((c) => c >= 0.98);
-            if (!isWhite) return true;
+            if (args.length === 1) {
+              // Grayscale
+              r = g = b = args[0];
+            } else if (args.length === 3) {
+              // RGB
+              r = args[0];
+              g = args[1];
+              b = args[2];
+            } else if (args.length === 4) {
+              // CMYK
+              const c = args[0], m = args[1], y = args[2], k = args[3];
+              r = (1 - c) * (1 - k);
+              g = (1 - m) * (1 - k);
+              b = (1 - y) * (1 - k);
+            }
+          }
+
+          // 2. Check Fill Operations (Used for backgrounds/shapes)
+          // OPS.fill (f), OPS.eoFill (f*)
+          if (fn === pdfjsLib.OPS.fill || fn === pdfjsLib.OPS.eoFill) {
+            console.log(`[BG Debug] Fill Op: ${fn}, Color: ${r}, ${g}, ${b}`);
+            // Check if "Non-White"
+            const isWhite = r >= 0.95 && g >= 0.95 && b >= 0.95;
+            if (!isWhite) {
+              console.log("[BG Debug] DETECTED COLORED BG!");
+              return true;
+            }
+          }
+
+          if (fn === pdfjsLib.OPS.shadingFill) {
+            console.log("[BG Debug] Shading Fill Detected!");
+            return true;
           }
         }
       }
