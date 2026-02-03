@@ -173,7 +173,8 @@ class RezoonATSScorer {
       if (idx !== -1) last = idx;
     });
 
-    if (!/[•●◦\-–]/.test(this.text)) {
+    const hasBullets = this.lines.some((l) => /^[•●◦\-–]/.test(l));
+    if (!hasBullets) {
       this.score -= 5;
       this.issues.push("No bullet points → -5");
     }
